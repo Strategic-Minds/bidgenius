@@ -238,8 +238,8 @@ export async function POST(req: NextRequest) {
     const { job_text, company = 'ncp' } = await req.json()
     if (!job_text?.trim()) return NextResponse.json({ ok: false, error: 'Job description required' }, { status: 400 })
 
-    const AI_KEY = process.env.OPENAI_API_KEY || process.env.AI_GATEWAY_API_KEY || ''
-    const AI_URL = process.env.AI_GATEWAY_API_KEY ? 'https://ai-gateway.vercel.sh/v1/chat/completions' : 'https://api.openai.com/v1/chat/completions'
+    const AI_KEY = process.env.OPENAI_API_KEY || ''
+    const AI_URL = 'https://api.openai.com/v1/chat/completions'
 
     const aiRes = await fetch(AI_URL, {
       method: 'POST',
@@ -247,7 +247,7 @@ export async function POST(req: NextRequest) {
       body: JSON.stringify({
         model: 'gpt-4o',
         temperature: 0.3,
-        response_format: { type: 'json_object' },
+        // response_format removed — using prompt-based JSON instruction for broader model compatibility
         messages: [
           { role: 'system', content: XPS_SYSTEM_PROMPT },
           { role: 'user', content: `Generate a complete proposal for this job:\n\n${job_text}\n\nCompany: ${company === 'ncp' ? 'National Concrete Polishing' : 'National Epoxy Pros'}` }
