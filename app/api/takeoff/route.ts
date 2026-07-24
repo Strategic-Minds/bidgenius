@@ -261,7 +261,12 @@ export async function POST(req: NextRequest) {
     }
 
     const aiData = await aiRes.json() as { choices: Array<{ message: { content: string } }> }
-    const parsed = JSON.parse(aiData.choices[0].message.content)
+    // Strip markdown code fences if model wraps JSON in ```json ... ```
+    let rawContent = aiData.choices[0].message.content.trim()
+    if (rawContent.startsWith('```')) {
+      rawContent = rawContent.replace(/^```[a-z]*\n?/i, '').replace(/```\s*$/,'').trim()
+    }
+    const parsed = JSON.parse(rawContent)
 
     const proposalNum = generateProposalNumber()
     const validUntil = new Date(Date.now() + 30*24*60*60*1000).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'})
