@@ -1,6 +1,64 @@
-import type { Metadata } from 'next'
-import './globals.css'
-export const metadata: Metadata = { title: 'BidGenius — AI Bid System', description: 'Turn any client email into a professional proposal in 60 seconds.' }
+import type { Metadata, Viewport } from 'next';
+import './globals.css';
+import PWARegister from '@/components/PWARegister';
+import PWAInstallPrompt from '@/components/PWAInstallPrompt';
+
+export const metadata: Metadata = {
+  title: 'BidGenius — AI Bid System',
+  description: 'Turn any client email into a professional proposal in 60 seconds.',
+  manifest: '/manifest.json',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'black-translucent',
+    title: 'BidGenius',
+  },
+  formatDetection: { telephone: false },
+  openGraph: {
+    type: 'website',
+    siteName: 'BidGenius',
+    title: 'BidGenius — AI Bid System',
+    description: 'Turn any client email into a professional proposal in 60 seconds.',
+  },
+  icons: {
+    icon: [
+      { url: '/icons/icon-32.png', sizes: '32x32', type: 'image/png' },
+      { url: '/icons/icon-96.png', sizes: '96x96', type: 'image/png' },
+    ],
+    apple: [
+      { url: '/icons/icon-180.png', sizes: '180x180', type: 'image/png' },
+    ],
+    other: [
+      { rel: 'mask-icon', url: '/icons/icon-512.png' },
+    ],
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#F6B800',
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  viewportFit: 'cover',
+};
+
 export default function RootLayout({ children }: { children: React.ReactNode }) {
-  return <html lang="en"><body>{children}</body></html>
+  return (
+    <html lang="en">
+      <head>
+        {/* Apple splash screens */}
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="mobile-web-app-capable" content="yes" />
+        <link rel="apple-touch-icon" sizes="180x180" href="/icons/icon-180.png" />
+        {/* Microsoft */}
+        <meta name="msapplication-TileColor" content="#F6B800" />
+        <meta name="msapplication-TileImage" content="/icons/icon-144.png" />
+      </head>
+      <body>
+        <PWARegister />
+        {children}
+        <PWAInstallPrompt />
+      </body>
+    </html>
+  );
 }
