@@ -1,44 +1,40 @@
 {
   "headers": [
     {
+      "source": "/(.*)",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" },
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        { "key": "X-Frame-Options", "value": "DENY" },
+        { "key": "Permissions-Policy", "value": "camera=(), microphone=(), geolocation=(), payment=()" },
+        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin" },
+        { "key": "Strict-Transport-Security", "value": "max-age=63072000; includeSubDomains; preload" }
+      ]
+    },
+    {
       "source": "/sw.js",
       "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "no-cache, no-store, must-revalidate"
-        },
-        {
-          "key": "Service-Worker-Allowed",
-          "value": "/"
-        }
+        { "key": "Cache-Control", "value": "no-cache, no-store, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
       ]
     },
     {
       "source": "/manifest.json",
       "headers": [
-        {
-          "key": "Content-Type",
-          "value": "application/manifest+json"
-        }
+        { "key": "Content-Type", "value": "application/manifest+json" }
+      ]
+    },
+    {
+      "source": "/api/(.*)",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-store, max-age=0" }
       ]
     }
   ],
   "crons": [
-    {
-      "path": "/api/cron/pipeline?phase=contractors",
-      "schedule": "0 4 * * *"
-    },
-    {
-      "path": "/api/cron/pipeline?phase=opportunities",
-      "schedule": "0 8 * * *"
-    },
-    {
-      "path": "/api/cron/pipeline?phase=fulfill",
-      "schedule": "0 12 * * *"
-    },
-    {
-      "path": "/api/cron/pipeline?phase=send",
-      "schedule": "0 16 * * *"
-    }
+    { "path": "/api/cron/pipeline?phase=contractors", "schedule": "0 4 * * *" },
+    { "path": "/api/cron/pipeline?phase=opportunities", "schedule": "0 8 * * *" },
+    { "path": "/api/cron/pipeline?phase=fulfill", "schedule": "0 12 * * *" },
+    { "path": "/api/cron/pipeline?phase=send", "schedule": "0 16 * * *" }
   ]
 }
