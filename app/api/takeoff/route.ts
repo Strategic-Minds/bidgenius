@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { operatorAuthorized } from '@/lib/pipeline/auth'
+
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 const AI_URL = 'https://ai-gateway.vercel.sh/v1/chat/completions'
+const MAX_JOB_TEXT = 50_000
+const MAX_PLAN_DATA = 25_000
 
-const XPS_SYSTEM = `You are the XPS AI Takeoff Engine — built on 12 years of Xtreme Polishing Systems contractor intelligence.
+const XPS_SYSTEM = `You are the XPS AI Takeoff Engine built on Xtreme Polishing Systems contractor intelligence.
 
 WAGE RATES (internal billing rates with 50% markup):
 - Field Super: $83.60/hr
-- Team Super: $76.00/hr  
+- Team Super: $76.00/hr
 - Field Tech: $68.40/hr
 
 PREP MULTIPLIERS (per sqft add-ons):
@@ -34,16 +38,16 @@ METALLIC EPOXY: Mechanically grind using 16 grit metal bonded diamonds. Apply ep
 FLAKE EPOXY: Mechanically grind using 16 grit metal bonded diamonds. Apply primer coat. Install base epoxy coat and broadcast vinyl color flake to rejection. Scrape and recoat. Install polyaspartic topcoat per manufacturer specifications.
 
 EXCLUSIONS (always include):
-1. Sloping to drains, ramps or other elevation changes — additional cost will apply if performed.
+1. Sloping to drains, ramps or other elevation changes. Additional cost will apply if performed.
 2. Excessive slab remediation, unsound legacy flooring removal, or cracking of more than 25 LF per 1,000 SF.
-3. Slab remediation of oil, grease, sealers, curing compounds or other concrete contaminates.
-4. Temperature control, heating, cooling or ventilation of space where work is being performed.
-5. Cleaning or protection of the final product once contracted scope of work is complete.
+3. Slab remediation of oil, grease, sealers, curing compounds or other concrete contaminants.
+4. Temperature control, heating, cooling or ventilation of the work space.
+5. Cleaning or protection of the final product once contracted work is complete.
 
 PAYMENT TERMS (NCP): 10% upon agreement, 40% upon arrival, 50% upon completion.
 PAYMENT TERMS (NEP): 50% upon arrival, 50% upon completion.
 
-OUTPUT: Return ONLY valid JSON. No markdown.
+Return only a valid JSON object matching this structure:
 {
   "proposal_number": "NCP-2026-XXXX",
   "company": "ncp",
@@ -55,58 +59,100 @@ OUTPUT: Return ONLY valid JSON. No markdown.
   "job_type": "Polished Concrete | Grind & Seal | Epoxy | Metallic Epoxy | Flake Epoxy",
   "gloss_level": "Cream Polish | Standard Polish | High Gloss | Mirror | N/A",
   "sqft": 0,
-  "scope_narrative": "Full paragraph scope of work from library above",
-  "line_items": [
-    { "num": "01", "description": "Mobilization & Equipment Setup", "unit": "LS", "qty": 1, "unit_price": 350, "total": 350 },
-    { "num": "02", "description": "Surface Preparation — 40G Metal Bond Diamond Grind", "unit": "SF", "qty": 0, "unit_price": 0, "total": 0 },
-    { "num": "03", "description": "Primary System Application", "unit": "SF", "qty": 0, "unit_price": 0, "total": 0 }
-  ],
+  "scope_narrative": "",
+  "line_items": [{ "num": "01", "description": "Mobilization & Equipment Setup", "unit": "LS", "qty": 1, "unit_price": 350, "total": 350 }],
   "subtotal": 0,
   "tax_rate": 0,
   "tax_amount": 0,
   "total_price": 0,
-  "payment_schedule": [
-    { "stage": "Upon Agreement", "pct": 10, "amount": 0 },
-    { "stage": "Upon Arrival", "pct": 40, "amount": 0 },
-    { "stage": "Upon Completion", "pct": 50, "amount": 0 }
-  ],
-  "exclusions": [
-    "Sloping to drains, ramps or other elevation changes",
-    "Excessive slab remediation or cracking exceeding 25 LF per 1,000 SF",
-    "Slab remediation of oil, grease, sealers, curing compounds or contaminates",
-    "Temperature control, heating, cooling or ventilation of space",
-    "Cleaning or protection of final product once scope is complete"
-  ],
+  "payment_schedule": [{ "stage": "Upon Agreement", "pct": 10, "amount": 0 }],
+  "exclusions": [],
   "estimated_labor_hours": 0,
   "estimated_duration_days": "",
   "validity_days": 30,
   "notes": ""
 }`
 
+function cleanText(value: unknown, max: number): string {
+  return typeof value === 'string' ? value.trim().slice(0, max) : ''
+}
+
+function validAiObject(value: unknown): value is Record<string, unknown> {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
 export async function POST(req: NextRequest) {
+  if (!operatorAuthorized(req)) {
+    return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+  }
+
+  const apiKey = process.env.AI_GATEWAY_API_KEY || ''
+  if (!apiKey) return NextResponse.json({ ok: false, error: 'ai_gateway_not_configured' }, { status: 503 })
+
   try {
-    const { job_text, company = 'ncp', plan_data } = await req.json()
-    let enriched = job_text || ''
-    if (plan_data) {
-      const pd = plan_data
-      enriched = `PROJECT FROM CONSTRUCTION PLANS:\nProject: ${pd.project_name||''}\nClient: ${pd.client_name||pd.gc_name||''}\nAddress: ${pd.project_address||''}\nTotal Sqft: ${pd.total_sqft||''}\nFinish: ${pd.finish_system||''}\nGloss: ${pd.gloss_level||''}\nCondition: ${pd.concrete_condition||''}\nSpecial: ${(pd.special_requirements||[]).join(', ')}\nTimeline: ${pd.timeline||''}\nExtra context: ${job_text||''}`
+    const body = await req.json().catch(() => null) as Record<string, unknown> | null
+    if (!body) return NextResponse.json({ ok: false, error: 'invalid_json' }, { status: 400 })
+
+    const company = body.company === 'nep' ? 'nep' : 'ncp'
+    const jobText = cleanText(body.job_text, MAX_JOB_TEXT)
+    const planData = validAiObject(body.plan_data) ? body.plan_data : null
+    if (!jobText && !planData) {
+      return NextResponse.json({ ok: false, error: 'job_text_or_plan_data_required' }, { status: 400 })
     }
-    const num = `${company.toUpperCase()}-2026-${String(Math.floor(1000+Math.random()*9000))}`
+
+    let enriched = jobText
+    if (planData) {
+      const serialized = JSON.stringify(planData).slice(0, MAX_PLAN_DATA)
+      enriched = `PROJECT FROM CONSTRUCTION PLANS:\n${serialized}\n\nEXTRA CONTEXT:\n${jobText}`
+    }
+
+    const year = new Date().getUTCFullYear()
+    const proposalNumber = `${company.toUpperCase()}-${year}-${crypto.randomUUID().slice(0, 8).toUpperCase()}`
     const messages = [
-      { role: 'system', content: XPS_SYSTEM + `\n\nCompany context: ${company==='ncp'?'National Concrete Polishing (NCP) — polished concrete specialist':'National Epoxy Pros (NEP) — epoxy flooring specialist'}. Proposal number: ${num}` },
+      {
+        role: 'system',
+        content: `${XPS_SYSTEM}\n\nCompany context: ${company === 'ncp' ? 'National Concrete Polishing' : 'National Epoxy Pros'}. Proposal number: ${proposalNumber}`
+      },
       { role: 'user', content: `Generate a complete professional proposal from this job information:\n\n${enriched}` }
     ]
-    const resp = await fetch(AI_URL, {
+
+    const response = await fetch(AI_URL, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${process.env.AI_GATEWAY_API_KEY||''}` },
-      body: JSON.stringify({ model: 'gpt-4o', messages, temperature: 0.1, max_tokens: 3000, response_format: { type: 'json_object' } })
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${apiKey}`
+      },
+      body: JSON.stringify({
+        model: process.env.AI_MODEL || 'gpt-4o',
+        messages,
+        temperature: 0.1,
+        max_tokens: 3000,
+        response_format: { type: 'json_object' }
+      }),
+      cache: 'no-store',
+      signal: AbortSignal.timeout(50_000)
     })
-    if (!resp.ok) throw new Error(`AI error ${resp.status}: ${await resp.text()}`)
-    const ai = await resp.json()
-    const parsed = JSON.parse(ai.choices[0].message.content)
-    return NextResponse.json({ ok: true, ...parsed, proposal_number: parsed.proposal_number || num })
-  } catch(e:any) {
-    console.error('[takeoff]', e)
-    return NextResponse.json({ ok: false, error: e.message }, { status: 500 })
+    if (!response.ok) {
+      return NextResponse.json({ ok: false, error: 'ai_gateway_request_failed' }, { status: 502 })
+    }
+
+    const payload = await response.json().catch(() => null) as Record<string, any> | null
+    const content = payload?.choices?.[0]?.message?.content
+    if (typeof content !== 'string' || content.length > 250_000) {
+      return NextResponse.json({ ok: false, error: 'invalid_ai_response' }, { status: 502 })
+    }
+    const parsed = JSON.parse(content) as unknown
+    if (!validAiObject(parsed)) {
+      return NextResponse.json({ ok: false, error: 'invalid_ai_payload' }, { status: 502 })
+    }
+
+    return NextResponse.json({
+      ok: true,
+      ...parsed,
+      company,
+      proposal_number: cleanText(parsed.proposal_number, 100) || proposalNumber
+    }, { headers: { 'Cache-Control': 'no-store' } })
+  } catch {
+    return NextResponse.json({ ok: false, error: 'takeoff_generation_failed' }, { status: 500 })
   }
 }
