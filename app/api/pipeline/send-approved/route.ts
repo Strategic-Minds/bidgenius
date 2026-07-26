@@ -13,12 +13,7 @@ function runId() {
 
 function recipientFor(item: FulfillmentRecord): string {
   const parsed = item.parsed || {}
-  return normalizeEmail(
-    parsed.client_email ||
-    parsed.contact_email ||
-    parsed.email ||
-    ''
-  )
+  return normalizeEmail(parsed.client_email || parsed.contact_email || parsed.email || '')
 }
 
 export async function POST(req: NextRequest) {
@@ -27,15 +22,15 @@ export async function POST(req: NextRequest) {
   const id = runId()
 
   if (process.env.OUTBOUND_ENABLED !== 'true') {
-    await recordRun({ run_id: id, phase: 'approved_outbound', status: 'blocked', error: 'OUTBOUND_ENABLED is not true' })
+    await recordRun({ run_id: id, phase: 'approved_outbound', status: 'blocked', error: 'outbound_disabled' })
     return NextResponse.json({
       ok: false,
       blocked: true,
       gate: 'OUTBOUND_ENABLED',
-      message: 'Approved outbound is installed but disabled. No email was sent.',
+      message: 'Approved outbound is installed but disabled. No email was sent.'
     }, { status: 423 })
   }
-  if (!storeConfigured()) return NextResponse.json({ ok: false, error: 'Pipeline store is not configured' }, { status: 503 })
+  if (!storeConfigured()) return NextResponse.json({ ok: false, error: 'store_not_configured' }, { status: 503 })
 
   try {
     const body = await req.json().catch(() => ({})) as { batch_size?: number }
@@ -49,6 +44,7 @@ export async function POST(req: NextRequest) {
     const sent: Array<Record<string, unknown>> = []
     const blocked: Array<Record<string, unknown>> = []
     const failed: Array<Record<string, unknown>> = []
+    const pipelineSecret = process.env.PIPELINE_SECRET || process.env.CRON_SECRET || ''
 
     for (const item of approved) {
       const approvedAt = item.approved_at || ''
@@ -56,62 +52,73 @@ export async function POST(req: NextRequest) {
       const recipient = recipientFor(item)
 
       if (!verifyApprovalSignature(item.id, approvedAt, signature)) {
-        blocked.push({ id: item.id, reason: 'invalid approval signature' })
+        blocked.push({ id: item.id, reason: 'invalid_approval_signature' })
         continue
       }
       if (!recipient) {
-        blocked.push({ id: item.id, reason: 'no verified recipient email' })
+        blocked.push({ id: item.id, reason: 'invalid_recipient' })
         continue
       }
 
-      const suppressed = await selectRows<{ email: string }>(
-        'bidgenius_suppression',
-        `email=eq.${encodeURIComponent(recipient)}`,
-        1
-      )
+      const [suppressed, priorOutbound] = await Promise.all([
+        selectRows<{ email: string }>('bidgenius_suppression', `email=eq.${encodeURIComponent(recipient)}`, 1),
+        selectRows<{ id: string; status: string }>('bidgenius_outbound', `fulfillment_id=eq.${encodeURIComponent(item.id)}&status=in.(queued,sent,delivered)`, 1)
+      ])
       if (suppressed.length) {
-        blocked.push({ id: item.id, recipient, reason: 'suppressed' })
+        blocked.push({ id: item.id, reason: 'suppressed' })
+        continue
+      }
+      if (priorOutbound.length) {
+        blocked.push({ id: item.id, reason: 'already_queued_or_sent' })
         continue
       }
 
       try {
         const response = await fetch(new URL('/api/send-proposal', req.nextUrl.origin), {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: {
+            'Content-Type': 'application/json',
+            ...(pipelineSecret ? { 'x-pipeline-secret': pipelineSecret } : {})
+          },
           body: JSON.stringify({
+            fulfillment_id: item.id,
+            approved_at: approvedAt,
+            approval_signature: signature,
             proposal_html: item.proposal_html,
             client_email: recipient,
             client_name: String(item.parsed?.client_name || item.parsed?.contact_name || 'Project Contact'),
             proposal_number: item.proposal_number,
-            company: item.company,
+            company: item.company
           }),
-          signal: AbortSignal.timeout(60000),
+          signal: AbortSignal.timeout(60000)
         })
-        const data = await response.json().catch(() => ({})) as Record<string, unknown>
-        if (!response.ok || !data.ok) throw new Error(String(data.error || response.status))
+        const data = await response.json().catch(() => ({})) as { ok?: boolean; id?: string; error?: string }
+        if (!response.ok || !data.ok || !data.id) throw new Error(data.error || 'provider_send_failed')
 
         const sentAt = new Date().toISOString()
         await updateRows('bidgenius_fulfillments', `id=eq.${encodeURIComponent(item.id)}`, {
           status: 'sent',
           sent_at: sentAt,
-          updated_at: sentAt,
+          last_error: null,
+          updated_at: sentAt
         })
         await insertRows('bidgenius_outbound', [{
           fulfillment_id: item.id,
           recipient_email: recipient,
           provider: 'resend',
-          provider_message_id: String(data.id || ''),
+          provider_message_id: data.id,
           status: 'sent',
           sent_at: sentAt,
           approved_by: item.approved_by,
           approval_signature: signature,
+          metadata: { run_id: id }
         }])
-        sent.push({ id: item.id, recipient, provider_message_id: data.id })
-      } catch (error) {
-        failed.push({ id: item.id, recipient, error: String(error) })
+        sent.push({ id: item.id, provider_message_id: data.id })
+      } catch {
+        failed.push({ id: item.id, error: 'provider_send_failed' })
         await updateRows('bidgenius_fulfillments', `id=eq.${encodeURIComponent(item.id)}`, {
-          last_error: String(error),
-          updated_at: new Date().toISOString(),
+          last_error: 'provider_send_failed',
+          updated_at: new Date().toISOString()
         })
       }
     }
@@ -122,7 +129,7 @@ export async function POST(req: NextRequest) {
       status: failed.length && !sent.length ? 'failed' : 'complete',
       sent: sent.length,
       duration_ms: Date.now() - started,
-      metadata: { blocked, failed },
+      metadata: { blocked, failed }
     })
 
     return NextResponse.json({
@@ -135,19 +142,20 @@ export async function POST(req: NextRequest) {
       sent_items: sent,
       blocked_items: blocked,
       failed_items: failed,
-      duration_ms: Date.now() - started,
-    })
-  } catch (error) {
-    await recordRun({ run_id: id, phase: 'approved_outbound', status: 'failed', duration_ms: Date.now() - started, error: String(error) })
-    return NextResponse.json({ ok: false, run_id: id, error: String(error) }, { status: 500 })
+      duration_ms: Date.now() - started
+    }, { headers: { 'Cache-Control': 'no-store' } })
+  } catch {
+    await recordRun({ run_id: id, phase: 'approved_outbound', status: 'failed', duration_ms: Date.now() - started, error: 'outbound_worker_failed' })
+    return NextResponse.json({ ok: false, run_id: id, error: 'outbound_worker_failed' }, { status: 500 })
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!pipelineAuthorized(req)) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   return NextResponse.json({
     ok: true,
     endpoint: '/api/pipeline/send-approved',
     outbound_enabled: process.env.OUTBOUND_ENABLED === 'true',
-    gates: ['Kevin approval', 'valid HMAC approval signature', 'verified recipient', 'suppression check'],
-  })
+    gates: ['approval decision', 'valid HMAC signature', 'verified recipient', 'suppression check', 'idempotency check']
+  }, { headers: { 'Cache-Control': 'no-store' } })
 }
