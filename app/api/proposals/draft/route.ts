@@ -6,6 +6,12 @@ import type { FulfillmentRecord } from '@/lib/pipeline/types'
 
 export const dynamic = 'force-dynamic'
 
+type StoredFulfillment = FulfillmentRecord & {
+  id?: string
+  created_at: string
+  updated_at: string
+}
+
 function text(value: unknown, max: number): string {
   return typeof value === 'string' ? value.trim().slice(0, max) : ''
 }
@@ -121,7 +127,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ ok: true, duplicate: true, id: existing[0].id, status: existing[0].status }, { headers: { 'Cache-Control': 'no-store' } })
     }
 
-    const record: FulfillmentRecord & { created_at: string; updated_at: string } = {
+    const record: StoredFulfillment = {
       opportunity_fingerprint: fingerprint,
       company,
       proposal_number: text(proposal.proposal_number, 100),
@@ -133,8 +139,8 @@ export async function POST(req: NextRequest) {
       created_at: new Date().toISOString(),
       updated_at: new Date().toISOString()
     }
-    const saved = await insertRows('bidgenius_fulfillments', [record])
-    const id = String((saved[0] as Record<string, unknown> | undefined)?.id || '')
+    const saved = await insertRows<StoredFulfillment>('bidgenius_fulfillments', [record])
+    const id = saved[0]?.id || ''
 
     await recordRun({
       run_id: runId,
