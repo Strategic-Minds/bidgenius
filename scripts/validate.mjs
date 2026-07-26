@@ -1,5 +1,5 @@
 import { access, readFile, readdir } from 'node:fs/promises'
-import { extname, join } from 'node:path'
+import { extname, join, normalize } from 'node:path'
 import { spawnSync } from 'node:child_process'
 
 const requiredFiles = [
@@ -8,6 +8,7 @@ const requiredFiles = [
   'app/api/pipeline/fulfill/route.ts',
   'app/api/pipeline/review/route.ts',
   'app/api/pipeline/send-approved/route.ts',
+  'app/api/proposals/draft/route.ts',
   'app/api/send-proposal/route.ts',
   'app/api/takeoff/route.ts',
   'app/api/parse-plans/route.ts',
@@ -79,13 +80,19 @@ const forbiddenPatterns = [
   { pattern: /info@epoxywillchangeyourlife\.com/i, label: 'hardcoded internal account' },
   { pattern: /strategicmindsadvisory@gmail\.com/i, label: 'hardcoded internal account' },
   { pattern: /jeremy@strategicmindsai\.com/i, label: 'hardcoded internal account' },
-  { pattern: /\$83\.60\/hr|50% markup/i, label: 'proprietary takeoff pricing in source' }
+  { pattern: /\$83\.60\/hr|50% markup/i, label: 'proprietary takeoff pricing in source' },
+  { pattern: /localStorage\.(getItem|setItem)\(['"]bidgenius_(proposals|settings)['"]\)/, label: 'sensitive browser-side persistence' }
 ]
 
 const scanRoots = ['app', 'components', 'lib', 'public', 'scripts', 'supabase']
 const scanFiles = ['README.md', '.env.example']
 for (const root of scanRoots) scanFiles.push(...await textFiles(root))
+
+const validatorPath = normalize('scripts/validate.mjs')
 for (const file of scanFiles) {
+  // The validator necessarily contains the detector expressions themselves.
+  // Excluding only this file avoids a self-referential false positive while all runtime source remains scanned.
+  if (normalize(file) === validatorPath) continue
   const text = await readFile(file, 'utf8')
   for (const { pattern, label } of forbiddenPatterns) {
     if (pattern.test(text)) throw new Error(`${label} detected in ${file}`)
@@ -103,8 +110,18 @@ for (const required of ['operatorAuthorized', 'TAKEOFF_PRIVATE_CONTEXT', 'AbortS
 }
 
 const outbound = await readFile('app/api/send-proposal/route.ts', 'utf8')
-for (const required of ['pipelineAuthorized', 'verifyApprovalSignature', 'OUTBOUND_ENABLED', 'Idempotency-Key']) {
+for (const required of ['pipelineAuthorized', 'verifyApprovalSignature', 'PIPELINE_EXECUTION_ENABLED', 'OUTBOUND_ENABLED', 'Idempotency-Key']) {
   if (!outbound.includes(required)) throw new Error(`Outbound hardening missing: ${required}`)
+}
+
+const approvedOutbound = await readFile('app/api/pipeline/send-approved/route.ts', 'utf8')
+for (const required of ['PIPELINE_EXECUTION_ENABLED', 'OUTBOUND_ENABLED', "status: 'queued'", 'verifyApprovalSignature', 'bidgenius_suppression']) {
+  if (!approvedOutbound.includes(required)) throw new Error(`Approved outbound hardening missing: ${required}`)
+}
+
+const draftRoute = await readFile('app/api/proposals/draft/route.ts', 'utf8')
+for (const required of ['operatorAuthorized', "status: 'review_pending'", 'escapeHtml', 'recordRun']) {
+  if (!draftRoute.includes(required)) throw new Error(`Draft queue protection missing: ${required}`)
 }
 
 const cron = await readFile('app/api/cron/pipeline/route.ts', 'utf8')
@@ -120,6 +137,6 @@ if (tests.status !== 0) process.exit(tests.status ?? 1)
 console.log(JSON.stringify({
   ok: true,
   requiredFiles: requiredFiles.length,
-  scannedFiles: scanFiles.length,
+  scannedFiles: scanFiles.length - 1,
   validation: 'passed'
 }))
