@@ -72,7 +72,7 @@ export async function latestRow<T>(table: string, timestampColumn = 'updated_at'
   return rows[0] || null
 }
 
-export async function insertRows<T extends Record<string, unknown>>(
+export async function insertRows<T extends object>(
   table: string,
   rows: T[],
   options: { upsert?: boolean; onConflict?: string } = {}
@@ -91,7 +91,7 @@ export async function insertRows<T extends Record<string, unknown>>(
   })
 }
 
-export async function updateRows<T extends Record<string, unknown>>(
+export async function updateRows<T extends object>(
   table: string,
   query: string,
   values: Partial<T>
