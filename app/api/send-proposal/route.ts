@@ -9,9 +9,20 @@ function safeText(value: unknown, max: number): string {
   return String(value || '').replace(/[\r\n]+/g, ' ').trim().slice(0, max)
 }
 
+function safeEmailHtml(value: unknown): string {
+  const html = String(value || '')
+  if (!html || html.length > 1_000_000) return ''
+  if (/<\s*(script|iframe|object|embed|form|input|button|meta|link)\b/i.test(html)) return ''
+  if (/\bon[a-z]+\s*=|javascript\s*:/i.test(html)) return ''
+  return html
+}
+
 export async function POST(req: NextRequest) {
   if (!pipelineAuthorized(req)) {
     return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
+  }
+  if (process.env.PIPELINE_EXECUTION_ENABLED !== 'true') {
+    return NextResponse.json({ ok: false, blocked: true, gate: 'PIPELINE_EXECUTION_ENABLED' }, { status: 423 })
   }
   if (process.env.OUTBOUND_ENABLED !== 'true') {
     return NextResponse.json({ ok: false, blocked: true, gate: 'OUTBOUND_ENABLED' }, { status: 423 })
@@ -27,15 +38,13 @@ export async function POST(req: NextRequest) {
     }
 
     const clientEmail = normalizeEmail(body.client_email)
-    const clientName = safeText(body.client_name, 120) || 'Project Contact'
     const proposalNumber = safeText(body.proposal_number, 80)
-    const company = body.company === 'ncp' ? 'ncp' : 'nep'
-    const proposalHtml = String(body.proposal_html || '')
+    const company = body.company === 'ncp' || body.company === 'nep' ? body.company : null
+    const proposalHtml = safeEmailHtml(body.proposal_html)
 
+    if (!company) return NextResponse.json({ ok: false, error: 'invalid_company' }, { status: 400 })
     if (!clientEmail) return NextResponse.json({ ok: false, error: 'invalid_recipient' }, { status: 400 })
-    if (!proposalHtml || proposalHtml.length > 1_000_000) {
-      return NextResponse.json({ ok: false, error: 'invalid_proposal_html' }, { status: 400 })
-    }
+    if (!proposalHtml) return NextResponse.json({ ok: false, error: 'invalid_proposal_html' }, { status: 400 })
 
     const resendKey = process.env.RESEND_API_KEY || ''
     const fromEmail = normalizeEmail(process.env.EMAIL_FROM)
@@ -63,7 +72,8 @@ export async function POST(req: NextRequest) {
         'Idempotency-Key': `bidgenius-${fulfillmentId}-${approvalSignature.slice(0, 16)}`
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(45000)
+      cache: 'no-store',
+      signal: AbortSignal.timeout(45_000)
     })
     const data = await response.json().catch(() => ({})) as { id?: string }
     if (!response.ok || !data.id) {
