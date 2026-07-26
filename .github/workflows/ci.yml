@@ -1,0 +1,81 @@
+name: BidGenius Validation
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - codex/national-merge-hardening-20260726
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bidgenius-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NEXT_TELEMETRY_DISABLED: '1'
+  PIPELINE_EXECUTION_ENABLED: 'false'
+  OUTBOUND_ENABLED: 'false'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Use Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm install --no-fund --no-audit
+
+      - name: Repository validation
+        run: |
+          set -o pipefail
+          npm run validate 2>&1 | tee validation.log
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-evidence
+          path: validation.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: TypeScript
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee typecheck.log
+
+      - name: Upload compiler evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-evidence
+          path: typecheck.log
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Production build
+        run: npm run build
+
+      - name: Production dependency audit
+        run: |
+          set -o pipefail
+          npm audit --omit=dev --audit-level=high 2>&1 | tee dependency-audit.log
+
+      - name: Upload dependency audit evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-evidence
+          path: dependency-audit.log
+          if-no-files-found: warn
+          retention-days: 14

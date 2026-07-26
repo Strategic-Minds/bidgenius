@@ -19,75 +19,104 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json().catch(() => ({})) as { dry_run?: boolean; state?: string; max_feeds?: number }
     const dryRun = body.dry_run !== false
+    const executionEnabled = process.env.PIPELINE_EXECUTION_ENABLED === 'true'
+    const state = typeof body.state === 'string' && /^[A-Za-z]{2}$/.test(body.state) ? body.state.toUpperCase() : ''
+    const maxFeeds = Math.max(1, Math.min(Number(body.max_feeds) || 20, 50))
     const feeds = configuredFeeds()
-      .filter(feed => !body.state || !feed.state || feed.state.toUpperCase() === body.state.toUpperCase())
-      .slice(0, Math.max(1, Math.min(body.max_feeds || 20, 50)))
+      .filter(feed => !state || !feed.state || feed.state === state)
+      .slice(0, maxFeeds)
 
     if (!feeds.length) {
+      return NextResponse.json({ ok: false, error: 'no_valid_public_bid_feeds_configured', dry_run: dryRun }, { status: 503 })
+    }
+
+    if (dryRun) {
+      const plan = feeds.map(feed => ({ name: feed.name, format: feed.format, state: feed.state || null }))
+      await recordRun({
+        run_id: id,
+        phase: 'opportunity_discovery',
+        status: 'complete',
+        territory: state || 'configured_feeds',
+        discovered: 0,
+        qualified: 0,
+        duration_ms: Date.now() - started,
+        metadata: { dry_run: true, external_feeds_invoked: false, feed_count: feeds.length }
+      })
       return NextResponse.json({
-        ok: false,
-        error: 'No public bid feeds configured',
-        environment_variable: 'PUBLIC_BID_FEEDS_JSON',
-        dry_run: dryRun,
-      }, { status: 503 })
+        ok: true,
+        run_id: id,
+        dry_run: true,
+        external_feeds_invoked: false,
+        feeds_planned: plan,
+        would_persist: storeConfigured(),
+        duration_ms: Date.now() - started
+      }, { headers: { 'Cache-Control': 'no-store' } })
+    }
+
+    if (!executionEnabled) {
+      await recordRun({ run_id: id, phase: 'opportunity_discovery', status: 'blocked', error: 'pipeline_execution_disabled' })
+      return NextResponse.json({ ok: false, blocked: true, gate: 'PIPELINE_EXECUTION_ENABLED' }, { status: 423 })
     }
 
     const found: OpportunityRecord[] = []
     const feedResults: Array<Record<string, unknown>> = []
-
     for (const feed of feeds) {
       try {
         const opportunities = await pullFeed(feed)
         found.push(...opportunities)
         feedResults.push({ name: feed.name, ok: true, found: opportunities.length })
-      } catch (error) {
-        feedResults.push({ name: feed.name, ok: false, error: String(error) })
+      } catch {
+        feedResults.push({ name: feed.name, ok: false, error: 'feed_collection_failed' })
       }
     }
 
     const unique = [...new Map(found.map(item => [item.fingerprint, item])).values()]
     let persisted = 0
-    if (!dryRun && storeConfigured() && unique.length) {
+    if (storeConfigured() && unique.length) {
       const rows = unique.map(item => ({ ...item, updated_at: new Date().toISOString() }))
       const saved = await insertRows('bidgenius_opportunities', rows, { upsert: true, onConflict: 'fingerprint' })
       persisted = saved.length
     }
 
+    const successfulFeeds = feedResults.filter(result => result.ok).length
     await recordRun({
       run_id: id,
       phase: 'opportunity_discovery',
-      status: 'complete',
-      territory: body.state || 'configured feeds',
+      status: successfulFeeds ? 'complete' : 'failed',
+      territory: state || 'configured_feeds',
       discovered: unique.length,
       qualified: unique.filter(item => item.status === 'qualified').length,
       duration_ms: Date.now() - started,
-      metadata: { dry_run: dryRun, persisted, feeds: feedResults },
+      metadata: { dry_run: false, persisted, feed_results: feedResults }
     })
 
     return NextResponse.json({
-      ok: true,
+      ok: successfulFeeds > 0,
       run_id: id,
-      dry_run: dryRun,
+      dry_run: false,
       feeds_checked: feeds.length,
+      feeds_succeeded: successfulFeeds,
       discovered: unique.length,
       qualified: unique.filter(item => item.status === 'qualified').length,
       persisted,
       feed_results: feedResults,
       opportunities: unique,
       store_configured: storeConfigured(),
-      duration_ms: Date.now() - started,
-    })
-  } catch (error) {
-    await recordRun({ run_id: id, phase: 'opportunity_discovery', status: 'failed', duration_ms: Date.now() - started, error: String(error) })
-    return NextResponse.json({ ok: false, run_id: id, error: String(error) }, { status: 500 })
+      duration_ms: Date.now() - started
+    }, { headers: { 'Cache-Control': 'no-store' } })
+  } catch {
+    await recordRun({ run_id: id, phase: 'opportunity_discovery', status: 'failed', duration_ms: Date.now() - started, error: 'opportunity_discovery_failed' })
+    return NextResponse.json({ ok: false, run_id: id, error: 'opportunity_discovery_failed' }, { status: 500 })
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  if (!pipelineAuthorized(req)) return NextResponse.json({ ok: false, error: 'unauthorized' }, { status: 401 })
   return NextResponse.json({
     ok: true,
     endpoint: '/api/pipeline/opportunities/discover',
     default_mode: 'dry_run',
-    feed_config_example: [{ name: 'Public procurement feed', url: 'https://example.gov/feed.json', format: 'json', state: 'FL' }],
-  })
+    dry_run_invokes_feeds: false,
+    feed_requirements: ['HTTPS only', 'public host', 'bounded response size', 'JSON/RSS/Atom']
+  }, { headers: { 'Cache-Control': 'no-store' } })
 }
