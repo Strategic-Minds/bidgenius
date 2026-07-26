@@ -24,9 +24,9 @@ export default async function Dashboard() {
     storeConfigured() ? countRows('bidgenius_fulfillments').catch(() => 0) : Promise.resolve(0)
   ])
 
-  const contractorCount = overview.ok && 'contractors' in overview ? overview.contractors.candidates : 0
-  const opportunityCount = overview.ok && 'opportunities' in overview ? overview.opportunities.total : 0
-  const reviewPending = overview.ok && 'approvals' in overview ? overview.approvals.review_pending : 0
+  const contractorCount = overview.ok ? overview.contractors?.candidates ?? 0 : 0
+  const opportunityCount = overview.ok ? overview.opportunities?.total ?? 0 : 0
+  const reviewPending = overview.ok ? overview.approvals?.review_pending ?? 0 : 0
   const checkedAt = overview.checked_at ? new Date(overview.checked_at).toLocaleString('en-US') : 'Unavailable'
 
   const services = [
