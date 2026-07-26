@@ -71,9 +71,9 @@ async function textFiles(root) {
 }
 
 const forbiddenPatterns = [
-  { pattern: /SUPABASE_SERVICE_ROLE_KEY\s*=\s*[^\s#]/, label: 'committed Supabase service key' },
-  { pattern: /PIPELINE_SECRET\s*=\s*[^\s#]/, label: 'committed pipeline secret' },
-  { pattern: /KEVIN_REVIEW_SECRET\s*=\s*[^\s#]/, label: 'committed review secret' },
+  { pattern: /SUPABASE_SERVICE_ROLE_KEY[ \t]*=[ \t]*[^\r\n# \t]/, label: 'committed Supabase service key' },
+  { pattern: /PIPELINE_SECRET[ \t]*=[ \t]*[^\r\n# \t]/, label: 'committed pipeline secret' },
+  { pattern: /KEVIN_REVIEW_SECRET[ \t]*=[ \t]*[^\r\n# \t]/, label: 'committed review secret' },
   { pattern: /BEGIN (RSA|OPENSSH|EC) PRIVATE KEY/, label: 'private key material' },
   { pattern: /drive\.google\.com\/drive\/folders\/[A-Za-z0-9_-]{20,}/, label: 'private Drive folder identifier' },
   { pattern: /jeremy@shopxps\.com/i, label: 'hardcoded internal recipient' },
