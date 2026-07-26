@@ -36,7 +36,18 @@ jobs:
         run: npm install --no-fund --no-audit
 
       - name: Repository validation
-        run: npm run validate
+        run: |
+          set -o pipefail
+          npm run validate 2>&1 | tee validation.log
+
+      - name: Upload validation evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-evidence
+          path: validation.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: TypeScript
         run: npm run typecheck
