@@ -50,7 +50,18 @@ jobs:
           retention-days: 14
 
       - name: TypeScript
-        run: npm run typecheck
+        run: |
+          set -o pipefail
+          npm run typecheck 2>&1 | tee typecheck.log
+
+      - name: Upload compiler evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: typecheck-evidence
+          path: typecheck.log
+          if-no-files-found: warn
+          retention-days: 14
 
       - name: Production build
         run: npm run build
